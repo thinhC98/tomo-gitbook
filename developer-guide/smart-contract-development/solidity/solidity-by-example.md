@@ -11,7 +11,7 @@ The persons behind the addresses can then choose to either vote themselves or to
 At the end of the voting time, `winningProposal()` will return the proposal with the largest number of votes.
 
 ```
-pragma solidity >=0.4.22 <=0.5.0;
+pragma solidity ^0.8.20;
 
 /// @title Voting with delegation.
 contract Ballot {
@@ -176,7 +176,7 @@ In this section, we will show how easy it is to create a completely blind auctio
 The general idea of the following simple auction contract is that everyone can send their bids during a bidding period. The bids already include sending money / TOMO in order to bind the bidders to their bid. If the highest bid is raised, the previously highest bidder gets their money back. After the end of the bidding period, the contract has to be called manually for the beneficiary to receive their money - contracts cannot activate themselves.
 
 ```
-pragma solidity >=0.4.22 <=0.5.0;
+pragma solidity ^0.8.20;
 
 contract SimpleAuction {
     // Parameters of the auction. Times are either
@@ -315,8 +315,8 @@ Another challenge is how to make the auction **binding and blind** at the same t
 
 The following contract solves this problem by accepting any value that is larger than the highest bid. Since this can of course only be checked during the reveal phase, some bids might be **invalid**, and this is on purpose (it even provides an explicit flag to place invalid bids with high value transfers): Bidders can confuse competition by placing several high or low invalid bids.
 
-```
-pragma solidity >0.4.23 <=0.5.0;
+````
+pragma solidity ^0.8.20;
 
 contract BlindAuction {
     struct Bid {
@@ -343,8 +343,8 @@ contract BlindAuction {
     /// functions. `onlyBefore` is applied to `bid` below:
     /// The new function body is the modifier's body where
     /// `_` is replaced by the old function body.
-    modifier onlyBefore(uint _time) { require(now < _time); _; }
-    modifier onlyAfter(uint _time) { require(now > _time); _; }
+    modifier onlyBefore(uint _time) { require(block.timestamp < _time); _; }
+    modifier onlyAfter(uint _time) { require(block.timestamp > _time); _; }
 
     constructor(
         uint _biddingTime,
@@ -352,7 +352,7 @@ contract BlindAuction {
         address payable _beneficiary
     ) public {
         beneficiary = _beneficiary;
-        biddingEnd = now + _biddingTime;
+        biddingEnd = block.timestamp + _biddingTime;
         revealEnd = biddingEnd + _revealTime;
     }
 
@@ -412,7 +412,7 @@ contract BlindAuction {
             // the same deposit.
             bidToCheck.blindedBid = bytes32(0);
         }
-        msg.sender.transfer(refund);
+        payable(msg.sender).transfer(refund);
     }
 
     /// Withdraw a bid that was overbid.
@@ -425,7 +425,7 @@ contract BlindAuction {
             // conditions -> effects -> interaction).
             pendingReturns[msg.sender] = 0;
 
-            msg.sender.transfer(amount);
+            payable(msg.sender).transfer(amount);
         }
     }
 
@@ -460,6 +460,7 @@ contract BlindAuction {
     }
 }
 ```
+````
 
 ### Safe Remote Purchase
 
@@ -469,8 +470,8 @@ There are multiple ways to solve this problem, but all fall short in one or the 
 
 This contract of course does not solve the problem, but gives an overview of how you can use state machine-like constructs inside a contract.
 
-```
-pragma solidity >=0.4.22 <=0.5.0;
+````
+pragma solidity ^0.8.20;
 
 contract Purchase {
     uint public value;
@@ -519,7 +520,7 @@ contract Purchase {
     // Division will truncate if it is an odd number.
     // Check via multiplication that it wasn't an odd number.
     constructor() public payable {
-        seller = msg.sender;
+        seller = payable(msg.sender);
         value = msg.value / 2;
         require((2 * value) == msg.value, "Value has to be even.");
     }
@@ -552,7 +553,7 @@ contract Purchase {
         payable
     {
         emit PurchaseConfirmed();
-        buyer = msg.sender;
+        buyer = payable(msg.sender);
         state = State.Locked;
     }
 
@@ -589,6 +590,7 @@ contract Purchase {
     }
 }
 ```
+````
 
 ### Micropayment Channel
 
@@ -670,8 +672,8 @@ The smart contract needs to know exactly what parameters were signed, and so it 
 
 **The full contract**
 
-```
-pragma solidity >=0.4.24 <=0.5.0;
+````
+pragma solidity ^0.8.20;
 
 contract ReceiverPays {
     address owner = msg.sender;
@@ -689,13 +691,13 @@ contract ReceiverPays {
 
         require(recoverSigner(message, signature) == owner);
 
-        msg.sender.transfer(amount);
+        payable(msg.sender).transfer(amount);
     }
 
     /// destroy the contract and reclaim the leftover funds.
     function shutdown() public {
         require(msg.sender == owner);
-        selfdestruct(msg.sender);
+        selfdestruct(payable(msg.sender));
     }
 
     /// signature methods.
@@ -734,6 +736,7 @@ contract ReceiverPays {
     }
 }
 ```
+````
 
 #### Writing a Simple Payment Channel
 
@@ -813,8 +816,8 @@ After this function is called, Bob can no longer receive any TOMO, so it is impo
 
 **The full contract**
 
-```
-pragma solidity >=0.4.24 <=0.5.0;
+````
+pragma solidity ^0.8.20;
 
 contract SimplePaymentChannel {
     address payable public sender;      // The account sending payments.
@@ -825,9 +828,9 @@ contract SimplePaymentChannel {
         public
         payable
     {
-        sender = msg.sender;
+        sender = payable(msg.sender);
         recipient = _recipient;
-        expiration = now + duration;
+        expiration = block.timestamp + duration;
     }
 
     /// the recipient can close the channel at any time by presenting a
@@ -852,7 +855,7 @@ contract SimplePaymentChannel {
     /// if the timeout is reached without the recipient closing the channel,
     /// then the TOMO is released back to the sender.
     function claimTimeout() public {
-        require(now >= expiration);
+        require(block.timestamp >= expiration);
         selfdestruct(sender);
     }
 
@@ -905,6 +908,7 @@ contract SimplePaymentChannel {
     }
 }
 ```
+````
 
 Note
 
@@ -952,7 +956,7 @@ function isValidSignature(contractAddress, amount, signature, expectedSigner) {
 A modular approach to building your contracts helps you reduce the complexity and improve the readability which will help to identify bugs and vulnerabilities during development and code review. If you specify and control the behaviour or each module in isolation, the interactions you have to consider are only those between the module specifications and not every other moving part of the contract. In the example below, the contract uses the `move` method of the `Balances` [library](https://solidity.readthedocs.io/en/v0.6.3/contracts.html#libraries) to check that balances sent between addresses match what you expect. In this way, the `Balances` library provides an isolated component that properly tracks balances of accounts. It is easy to verify that the `Balances` library never produces negative balances or overflows and the sum of all balances is an invariant across the lifetime of the contract.
 
 ```
-pragma solidity >=0.4.22 <=0.5.0;
+pragma solidity ^0.8.20;
 
 library Balances {
     function move(mapping(address => uint256) storage balances, address from, address to, uint amount) internal {
@@ -999,4 +1003,4 @@ contract Token {
 }
 ```
 
-[Next ](https://solidity.readthedocs.io/en/v0.6.3/solidity-in-depth.html)[ Previous](https://solidity.readthedocs.io/en/v0.6.3/installing-solidity.html)\
+[Next ](https://solidity.readthedocs.io/en/v0.6.3/solidity-in-depth.html)[Previous](https://solidity.readthedocs.io/en/v0.6.3/installing-solidity.html)\\

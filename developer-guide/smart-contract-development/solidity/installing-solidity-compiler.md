@@ -2,7 +2,7 @@
 
 ### Versioning
 
-Solidity versions follow [semantic versioning](https://semver.org/) and in addition to releases, **nightly development builds** are also made available. However, we recommend to only install Solidity compiler versions <= 0.5.0 as higher versions introduce breaking changes resulting in opcodes that are not available in that current EVM version of TomoChain.
+Solidity versions follow [semantic versioning](https://semver.org/) and in addition to releases, **nightly development builds** are also made available. You can install any Solidity compiler versions However, we recommend to only install Solidity compiler versions >=0.8.0 to able to use full opcode in the latest EVM version of TomoChain.
 
 ### Remix
 
