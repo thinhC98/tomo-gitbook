@@ -315,151 +315,71 @@ Another challenge is how to make the auction **binding and blind** at the same t
 
 The following contract solves this problem by accepting any value that is larger than the highest bid. Since this can of course only be checked during the reveal phase, some bids might be **invalid**, and this is on purpose (it even provides an explicit flag to place invalid bids with high value transfers): Bidders can confuse competition by placing several high or low invalid bids.
 
-```
+````
 pragma solidity ^0.8.20;
 
-contract BlindAuction {
-    struct Bid {
-        bytes32 blindedBid;
-        uint deposit;
+contract ReceiverPays {
+    address owner = msg.sender;
+
+    mapping(uint256 => bool) usedNonces;
+
+    constructor() public payable {}
+
+    function claimPayment(uint256 amount, uint256 nonce, bytes memory signature) public {
+        require(!usedNonces[nonce]);
+        usedNonces[nonce] = true;
+
+        // this recreates the message that was signed on the client
+        bytes32 message = prefixed(keccak256(abi.encodePacked(msg.sender, amount, nonce, this)));
+
+        require(recoverSigner(message, signature) == owner);
+
+        payable(msg.sender).transfer(amount);
     }
 
-    address payable public beneficiary;
-    uint public biddingEnd;
-    uint public revealEnd;
-    bool public ended;
-
-    mapping(address => Bid[]) public bids;
-
-    address public highestBidder;
-    uint public highestBid;
-
-    // Allowed withdrawals of previous bids
-    mapping(address => uint) pendingReturns;
-
-    event AuctionEnded(address winner, uint highestBid);
-
-    /// Modifiers are a convenient way to validate inputs to
-    /// functions. `onlyBefore` is applied to `bid` below:
-    /// The new function body is the modifier's body where
-    /// `_` is replaced by the old function body.
-    modifier onlyBefore(uint _time) { require(now < _time); _; }
-    modifier onlyAfter(uint _time) { require(now > _time); _; }
-
-    constructor(
-        uint _biddingTime,
-        uint _revealTime,
-        address payable _beneficiary
-    ) public {
-        beneficiary = _beneficiary;
-        biddingEnd = now + _biddingTime;
-        revealEnd = biddingEnd + _revealTime;
+    /// destroy the contract and reclaim the leftover funds.
+    function shutdown() public {
+        require(msg.sender == owner);
+        selfdestruct(payable(msg.sender));
     }
 
-    /// Place a blinded bid with `_blindedBid` =
-    /// keccak256(abi.encodePacked(value, fake, secret)).
-    /// The sent TOMO is only refunded if the bid is correctly
-    /// revealed in the revealing phase. The bid is valid if the
-    /// TOMO sent together with the bid is at least "value" and
-    /// "fake" is not true. Setting "fake" to true and sending
-    /// not the exact amount are ways to hide the real bid but
-    /// still make the required deposit. The same address can
-    /// place multiple bids.
-    function bid(bytes32 _blindedBid)
-        public
-        payable
-        onlyBefore(biddingEnd)
+    /// signature methods.
+    function splitSignature(bytes memory sig)
+        internal
+        pure
+        returns (uint8 v, bytes32 r, bytes32 s)
     {
-        bids[msg.sender].push(Bid({
-            blindedBid: _blindedBid,
-            deposit: msg.value
-        }));
+        require(sig.length == 65);
+
+        assembly {
+            // first 32 bytes, after the length prefix.
+            r := mload(add(sig, 32))
+            // second 32 bytes.
+            s := mload(add(sig, 64))
+            // final byte (first byte of the next 32 bytes).
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        return (v, r, s);
     }
 
-    /// Reveal your blinded bids. You will get a refund for all
-    /// correctly blinded invalid bids and for all bids except for
-    /// the totally highest.
-    function reveal(
-        uint[] memory _values,
-        bool[] memory _fake,
-        bytes32[] memory _secret
-    )
-        public
-        onlyAfter(biddingEnd)
-        onlyBefore(revealEnd)
+    function recoverSigner(bytes32 message, bytes memory sig)
+        internal
+        pure
+        returns (address)
     {
-        uint length = bids[msg.sender].length;
-        require(_values.length == length);
-        require(_fake.length == length);
-        require(_secret.length == length);
+        (uint8 v, bytes32 r, bytes32 s) = splitSignature(sig);
 
-        uint refund;
-        for (uint i = 0; i < length; i++) {
-            Bid storage bidToCheck = bids[msg.sender][i];
-            (uint value, bool fake, bytes32 secret) =
-                    (_values[i], _fake[i], _secret[i]);
-            if (bidToCheck.blindedBid != keccak256(abi.encodePacked(value, fake, secret))) {
-                // Bid was not actually revealed.
-                // Do not refund deposit.
-                continue;
-            }
-            refund += bidToCheck.deposit;
-            if (!fake && bidToCheck.deposit >= value) {
-                if (placeBid(msg.sender, value))
-                    refund -= value;
-            }
-            // Make it impossible for the sender to re-claim
-            // the same deposit.
-            bidToCheck.blindedBid = bytes32(0);
-        }
-        msg.sender.transfer(refund);
+        return ecrecover(message, v, r, s);
     }
 
-    /// Withdraw a bid that was overbid.
-    function withdraw() public {
-        uint amount = pendingReturns[msg.sender];
-        if (amount > 0) {
-            // It is important to set this to zero because the recipient
-            // can call this function again as part of the receiving call
-            // before `transfer` returns (see the remark above about
-            // conditions -> effects -> interaction).
-            pendingReturns[msg.sender] = 0;
-
-            msg.sender.transfer(amount);
-        }
-    }
-
-    /// End the auction and send the highest bid
-    /// to the beneficiary.
-    function auctionEnd()
-        public
-        onlyAfter(revealEnd)
-    {
-        require(!ended);
-        emit AuctionEnded(highestBidder, highestBid);
-        ended = true;
-        beneficiary.transfer(highestBid);
-    }
-
-    // This is an "internal" function which means that it
-    // can only be called from the contract itself (or from
-    // derived contracts).
-    function placeBid(address bidder, uint value) internal
-            returns (bool success)
-    {
-        if (value <= highestBid) {
-            return false;
-        }
-        if (highestBidder != address(0)) {
-            // Refund the previously highest bidder.
-            pendingReturns[highestBidder] += highestBid;
-        }
-        highestBid = value;
-        highestBidder = bidder;
-        return true;
+    /// builds a prefixed hash to mimic the behavior of eth_sign.
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
     }
 }
 ```
+````
 
 ### Safe Remote Purchase
 
@@ -469,7 +389,7 @@ There are multiple ways to solve this problem, but all fall short in one or the 
 
 This contract of course does not solve the problem, but gives an overview of how you can use state machine-like constructs inside a contract.
 
-```
+````
 pragma solidity ^0.8.20;
 
 contract Purchase {
@@ -519,7 +439,7 @@ contract Purchase {
     // Division will truncate if it is an odd number.
     // Check via multiplication that it wasn't an odd number.
     constructor() public payable {
-        seller = msg.sender;
+        seller = payable(msg.sender);
         value = msg.value / 2;
         require((2 * value) == msg.value, "Value has to be even.");
     }
@@ -552,7 +472,7 @@ contract Purchase {
         payable
     {
         emit PurchaseConfirmed();
-        buyer = msg.sender;
+        buyer = payable(msg.sender);
         state = State.Locked;
     }
 
@@ -589,6 +509,7 @@ contract Purchase {
     }
 }
 ```
+````
 
 ### Micropayment Channel
 
@@ -670,7 +591,7 @@ The smart contract needs to know exactly what parameters were signed, and so it 
 
 **The full contract**
 
-```
+````
 pragma solidity ^0.8.20;
 
 contract ReceiverPays {
@@ -689,13 +610,13 @@ contract ReceiverPays {
 
         require(recoverSigner(message, signature) == owner);
 
-        msg.sender.transfer(amount);
+        payable(msg.sender).transfer(amount);
     }
 
     /// destroy the contract and reclaim the leftover funds.
     function shutdown() public {
         require(msg.sender == owner);
-        selfdestruct(msg.sender);
+        selfdestruct(payable(msg.sender));
     }
 
     /// signature methods.
@@ -734,6 +655,7 @@ contract ReceiverPays {
     }
 }
 ```
+````
 
 #### Writing a Simple Payment Channel
 
@@ -813,7 +735,7 @@ After this function is called, Bob can no longer receive any TOMO, so it is impo
 
 **The full contract**
 
-```
+````
 pragma solidity ^0.8.20;
 
 contract SimplePaymentChannel {
@@ -825,9 +747,9 @@ contract SimplePaymentChannel {
         public
         payable
     {
-        sender = msg.sender;
+        sender = payable(msg.sender);
         recipient = _recipient;
-        expiration = now + duration;
+        expiration = block.timestamp + duration;
     }
 
     /// the recipient can close the channel at any time by presenting a
@@ -852,7 +774,7 @@ contract SimplePaymentChannel {
     /// if the timeout is reached without the recipient closing the channel,
     /// then the TOMO is released back to the sender.
     function claimTimeout() public {
-        require(now >= expiration);
+        require(block.timestamp >= expiration);
         selfdestruct(sender);
     }
 
@@ -905,6 +827,7 @@ contract SimplePaymentChannel {
     }
 }
 ```
+````
 
 Note
 
